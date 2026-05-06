@@ -1,0 +1,14 @@
+# Railway Nixpacks config for SentinelStream
+# Tells Railway how to build and run the Next.js app
+
+[phases.setup]
+nixPkgs = ["nodejs_20", "python3", "gcc", "gnumake"]
+
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm start"

@@ -35,12 +35,34 @@ function SignalFeedInner() {
     if (refresh) setRefreshing(true);
     const p = new URLSearchParams();
     if (projectId) p.set("projectId", projectId);
-    if (refresh)   p.set("refresh", "true");
     const res  = await fetch(`/api/signals?${p}`);
     const data = await res.json();
     setSignals(data.signals ?? []);
     setLoading(false); setRefreshing(false);
   }, [projectId]);
+
+  // Trigger background ingest then poll for new signals
+  const triggerIngest = useCallback(async () => {
+    setRefreshing(true);
+    if (projectId) {
+      await fetch("/api/ingest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectId }) });
+      // Poll every 4s for up to 60s
+      let polls = 0;
+      const poll = setInterval(async () => {
+        polls++;
+        await fetchSignals();
+        const st = await fetch(`/api/ingest?projectId=${projectId}`);
+        const sd = await st.json();
+        if (!sd.running || polls >= 15) {
+          clearInterval(poll);
+          setRefreshing(false);
+        }
+      }, 4000);
+    } else {
+      await fetchSignals();
+      setRefreshing(false);
+    }
+  }, [projectId, fetchSignals]);
 
   useEffect(() => { fetchSignals(); }, [fetchSignals]);
 
@@ -67,7 +89,7 @@ function SignalFeedInner() {
             <h1 style={{ fontSize: 24, fontWeight: 900, color: "#f1f5f9", letterSpacing: "-0.6px" }}>Signal Feed</h1>
             <p style={{ fontSize: 13, color: "#334155", marginTop: 4 }}>NLP-extracted adverse events · MedDRA mapped · PII redacted</p>
           </div>
-          <button onClick={() => fetchSignals(true)} disabled={refreshing} className="btn btn-primary btn-sm fade-up">
+          <button onClick={triggerIngest} disabled={refreshing} className="btn btn-primary btn-sm fade-up">
             {refreshing ? <><span className="spinner" style={{ width: 13, height: 13 }} /> Fetching…</> : <>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
               Fetch New Signals

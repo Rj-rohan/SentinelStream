@@ -1,8 +1,8 @@
 // OpenFDA Drug Adverse Event API — real FAERS data, completely free, no key required.
 // Docs: https://open.fda.gov/apis/drug/event/
 
-import { addSignal, updateSourceSync, projectStore } from "./store";
-import type { Signal } from "./store";
+import { db_projects, db_signals, db_sources, checkAndGenerateAlert } from "./db";
+import type { Signal } from "./db";
 
 const BASE = "https://api.fda.gov/drug/event.json";
 
@@ -66,7 +66,7 @@ export async function ingestOpenFDAForDrug(
       const primaryDrug = drugs.find(
         (d) =>
           d.medicinalproduct?.toLowerCase().includes(drugName.toLowerCase()) &&
-          d.drugcharacterization === "1" // suspect drug
+          d.drugcharacterization === "1"
       ) ?? drugs[0];
 
       if (!primaryDrug?.medicinalproduct) continue;
@@ -86,7 +86,7 @@ export async function ingestOpenFDAForDrug(
         source: "openfda",
         sourceUrl: `https://www.accessdata.fda.gov/scripts/cder/daf/index.cfm?event=overview.process&ApplNo=${event.safetyreportid}`,
         originalText: text,
-        redactedText: text, // FDA data is already de-identified
+        redactedText: text,
         author: "[REDACTED]",
         timestamp: event.receivedate
           ? `${event.receivedate.slice(0, 4)}-${event.receivedate.slice(4, 6)}-${event.receivedate.slice(6, 8)}T00:00:00Z`
@@ -96,7 +96,7 @@ export async function ingestOpenFDAForDrug(
         meddraCode: "10000000",
         meddraterm: primaryReaction.reactionmeddrapt ?? "Adverse event",
         severity,
-        confidence: 0.95, // FDA FAERS is authoritative
+        confidence: 0.95,
         sentiment: severity === "critical" ? "distress" : "concern",
         piiDetected: false,
         piiTypes: [],
@@ -104,11 +104,14 @@ export async function ingestOpenFDAForDrug(
         geography: country === "IN" || country === "INDIA" ? "India" : country,
       };
 
-      addSignal(sig);
+      if (db_signals.exists(sig.sourceUrl)) continue;
+      db_signals.insert(sig);
+      db_projects.incrementSignal(projectId, sig.severity === "critical");
+      checkAndGenerateAlert(sig);
       ingested++;
     }
 
-    updateSourceSync("src_openfda", ingested);
+    if (ingested > 0) db_sources.syncUpdate("src_openfda", ingested);
     return ingested;
   } catch {
     return 0;
@@ -116,7 +119,7 @@ export async function ingestOpenFDAForDrug(
 }
 
 export async function ingestOpenFDAForProject(projectId: string): Promise<number> {
-  const project = projectStore.find((p) => p.id === projectId);
+  const project = db_projects.get(projectId);
   if (!project) return 0;
 
   let total = 0;

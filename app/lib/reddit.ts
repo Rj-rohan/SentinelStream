@@ -2,8 +2,8 @@
 // With REDDIT_CLIENT_ID + REDDIT_CLIENT_SECRET it uses OAuth for higher rate limits.
 
 import { analyzeText, extractGeography, hashText } from "./nlp";
-import { addSignal, updateSourceSync, projectStore, signalStore, piiStore } from "./store";
-import type { Signal } from "./store";
+import { db_projects, db_signals, db_pii, db_sources, checkAndGenerateAlert } from "./db";
+import type { Signal } from "./db";
 
 const HEALTH_SUBREDDITS = [
   "diabetes", "diabetes_t2", "diabetes_t1",
@@ -77,7 +77,7 @@ async function fetchSubredditSearch(subreddit: string, query: string, limit = 10
 }
 
 export async function ingestRedditForProject(projectId: string): Promise<number> {
-  const project = projectStore.find((p) => p.id === projectId);
+  const project = db_projects.get(projectId);
   if (!project) return 0;
 
   const subreddits = project.subreddits?.length
@@ -123,9 +123,13 @@ export async function ingestRedditForProject(projectId: string): Promise<number>
           subreddit: post.subreddit,
         };
 
-        // Log PII events
+        if (db_signals.exists(sig.sourceUrl)) continue;
+        db_signals.insert(sig);
+        db_projects.incrementSignal(projectId, sig.severity === "critical");
+        checkAndGenerateAlert(sig);
+
         if (nlp.piiDetected) {
-          piiStore.unshift({
+          db_pii.insert({
             id: `pii_${Date.now()}_${Math.random().toString(36).slice(2)}`,
             timestamp: new Date().toISOString(),
             source: "reddit",
@@ -135,8 +139,6 @@ export async function ingestRedditForProject(projectId: string): Promise<number>
             projectId,
           });
         }
-
-        addSignal(sig);
         ingested++;
       }
     }
@@ -174,8 +176,13 @@ export async function ingestRedditForProject(projectId: string): Promise<number>
         subreddit: post.subreddit,
       };
 
+      if (db_signals.exists(sig.sourceUrl)) continue;
+      db_signals.insert(sig);
+      db_projects.incrementSignal(projectId, sig.severity === "critical");
+      checkAndGenerateAlert(sig);
+
       if (nlp.piiDetected) {
-        piiStore.unshift({
+        db_pii.insert({
           id: `pii_${Date.now()}_${Math.random().toString(36).slice(2)}`,
           timestamp: new Date().toISOString(),
           source: "reddit",
@@ -185,8 +192,6 @@ export async function ingestRedditForProject(projectId: string): Promise<number>
           projectId,
         });
       }
-
-      addSignal(sig);
       ingested++;
     }
 
@@ -194,16 +199,6 @@ export async function ingestRedditForProject(projectId: string): Promise<number>
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  updateSourceSync("src_reddit", ingested);
+  if (ingested > 0) db_sources.syncUpdate("src_reddit", ingested);
   return ingested;
-}
-
-// Ingest across all active projects
-export async function ingestRedditAll(): Promise<number> {
-  const activeProjects = projectStore.filter((p) => p.status === "active");
-  let total = 0;
-  for (const proj of activeProjects) {
-    total += await ingestRedditForProject(proj.id);
-  }
-  return total;
 }

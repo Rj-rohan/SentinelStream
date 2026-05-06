@@ -42,8 +42,21 @@ export default function ProjectsPage() {
 
   async function ingest(id: string) {
     setIngesting(id);
+    // Fire and forget — ingest runs in background, we poll until done
     await fetch("/api/ingest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectId: id }) });
-    await load(); setIngesting(null);
+    // Poll every 4s for up to 60s until ingestion finishes
+    let polls = 0;
+    const poll = setInterval(async () => {
+      polls++;
+      await load();
+      const statusRes = await fetch(`/api/ingest?projectId=${id}`);
+      const statusData = await statusRes.json();
+      if (!statusData.running || polls >= 15) {
+        clearInterval(poll);
+        await load();
+        setIngesting(null);
+      }
+    }, 4000);
   }
 
   return (
